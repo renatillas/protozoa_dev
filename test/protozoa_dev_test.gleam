@@ -1,3 +1,4 @@
+import birdie
 import glance
 import gleam/list
 import gleam/string
@@ -714,31 +715,8 @@ pub fn multiple_proto_files_combined_test() {
   // Verify the generated content combines both files
   let expected_file = output_dir <> "/proto.gleam"
   let assert Ok(content) = simplifile.read(expected_file)
+  birdie.snap(content, "Mutliple proto files combined")
 
-  // Should contain header mentioning both files
-  assert string.contains(content, "common.proto")
-  assert string.contains(content, "imports.proto")
-
-  // Should contain types from common.proto
-  assert string.contains(content, "pub type Address")
-  assert string.contains(content, "pub type Priority")
-  assert string.contains(content, "pub type Timestamp")
-
-  // Should contain types from imports.proto
-  assert string.contains(content, "pub type Person")
-  assert string.contains(content, "pub type Organization")
-
-  // Should contain encoders and decoders for all types
-  assert string.contains(content, "pub fn encode_address")
-  assert string.contains(content, "pub fn encode_person")
-  assert string.contains(content, "pub fn address_decoder")
-  assert string.contains(content, "pub fn person_decoder")
-
-  // Should contain enum helpers
-  assert string.contains(content, "encode_priority_value")
-  assert string.contains(content, "decode_priority_field")
-
-  // Clean up
   let _ = simplifile.delete(output_dir)
 }
 

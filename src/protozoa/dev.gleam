@@ -18,7 +18,7 @@ import simplifile
 import snag.{type Result}
 
 pub type Command {
-  Generate
+  Generate(auto_yes: Bool)
   Check
 }
 
@@ -33,7 +33,7 @@ pub fn main() -> Nil {
   case parse_args(args) {
     Ok(#(cmd, input, output, imports)) -> {
       case cmd {
-        Generate -> run_generate(input, output, imports)
+        Generate(auto_yes) -> run_generate(input, output, imports, auto_yes)
         Check -> run_check(input, output, imports)
       }
     }
@@ -53,7 +53,9 @@ fn parse_args(
   args: List(String),
 ) -> Result(#(Command, String, String, List(String))) {
   case args {
-    [] | ["check"] -> parse_auto_mode(args)
+    [] | ["check"] -> parse_auto_mode(args, False)
+    ["-y"] -> parse_auto_mode([], True)
+    ["-y", "check"] | ["check", "-y"] -> parse_auto_mode(["check"], True)
     ["-h"] | ["--help"] -> snag.error("help")
     _ -> parse_manual_mode(args)
   }
@@ -61,10 +63,11 @@ fn parse_args(
 
 fn parse_auto_mode(
   args: List(String),
+  auto_yes: Bool,
 ) -> Result(#(Command, String, String, List(String))) {
   let cmd = case args {
     ["check"] -> Check
-    _ -> Generate
+    _ -> Generate(auto_yes)
   }
 
   case discover_project_structure() {
@@ -78,7 +81,7 @@ fn parse_auto_mode(
           // This allows checking in projects that don't have proto files yet
           Ok(#(cmd, ".", ".", ["."]))
         }
-        Generate ->
+        Generate(_) ->
           Error(error)
           |> snag.context("No gleam.toml found or no proto files detected")
       }
@@ -89,10 +92,16 @@ fn parse_auto_mode(
 fn parse_manual_mode(
   args: List(String),
 ) -> Result(#(Command, String, String, List(String))) {
-  let #(imports, remaining) = extract_imports(args, [])
+  // Check for -y flag
+  let #(auto_yes, args_without_y) = case list.contains(args, "-y") {
+    True -> #(True, list.filter(args, fn(arg) { arg != "-y" }))
+    False -> #(False, args)
+  }
+
+  let #(imports, remaining) = extract_imports(args_without_y, [])
   case remaining {
-    [input, output] -> Ok(#(Generate, input, output, imports))
-    [input] -> Ok(#(Generate, input, ".", imports))
+    [input, output] -> Ok(#(Generate(auto_yes), input, output, imports))
+    [input] -> Ok(#(Generate(auto_yes), input, ".", imports))
     _ -> snag.error("Invalid arguments")
   }
 }
@@ -140,7 +149,39 @@ fn run_generate(
   input: String,
   output: String,
   import_paths: List(String),
+  auto_yes: Bool,
 ) -> Nil {
+  // Check if output directory exists and has .gleam files
+  let has_existing_files = case simplifile.read_directory(output) {
+    Ok(files) -> list.any(files, fn(f) { string.ends_with(f, ".gleam") })
+    Error(_) -> False
+  }
+
+  // Show warning if files exist and user hasn't auto-accepted
+  case has_existing_files && !auto_yes {
+    True -> {
+      io.println("")
+      io.println("⚠️  WARNING: Generated files will be OVERWRITTEN!")
+      io.println("")
+      io.println("The following directory contains generated .gleam files:")
+      io.println("  " <> output)
+      io.println("")
+      io.println("ALL EXISTING GENERATED FILES WILL BE DELETED AND REGENERATED.")
+      io.println("Any manual changes to generated files will be LOST.")
+      io.println("")
+      io.print("Continue? [y/N]: ")
+
+      case read_line() {
+        "y" | "Y" | "yes" | "Yes" -> Nil
+        _ -> {
+          io.println("❌ Aborted by user")
+          exit(0)
+        }
+      }
+    }
+    False -> Nil
+  }
+
   io.println("🔄 Generating proto files...")
   case generate_files(input, output, import_paths) {
     Ok(files) -> {
@@ -161,6 +202,14 @@ fn run_generate(
       exit(1)
     }
   }
+}
+
+@external(erlang, "io", "get_line")
+fn read_line_raw(prompt: String) -> String
+
+fn read_line() -> String {
+  read_line_raw("")
+  |> string.trim
 }
 
 fn run_check(input: String, output: String, import_paths: List(String)) -> Nil {
@@ -247,16 +296,23 @@ fn print_usage() -> Nil {
     "  gleam run -m protozoa_dev                 # Auto-detect and generate",
   )
   io.println("  gleam run -m protozoa_dev check         # Check for changes")
+  io.println("  gleam run -m protozoa_dev -y            # Skip confirmation prompt")
   io.println("")
   io.println("Advanced Usage:")
   io.println("  gleam run -m protozoa_dev input.proto [dir]  # Manual mode")
   io.println(
     "  gleam run -m protozoa_dev -Ipath input.proto # With import paths",
   )
+  io.println(
+    "  gleam run -m protozoa_dev -y input.proto      # Skip confirmation",
+  )
   io.println("")
   io.println("Options:")
   io.println(
     "  -I<path>                                 # Add import search path",
+  )
+  io.println(
+    "  -y                                       # Auto-accept overwrite warning",
   )
   io.println("  --help                                   # Show help")
 }
